@@ -101,6 +101,7 @@ app.use("/api/products", productsRoutes)
 app.use("/api/reports", reportsRoutes) // CORREGIDO: Montar en /api/reports
 app.use("/api/cash", cashRoutes) // AGREGADO: Ruta de cash
 app.use("/api/config", ticketRoutes)
+app.use("/api/ticket", ticketRoutes)
 
 // Ruta de salud mejorada
 app.get("/api/health", async (req, res) => {
@@ -142,6 +143,7 @@ app.get("/", (req, res) => {
       reports: "/api/reports",
       cash: "/api/cash",
       config: "/api/config",
+      ticket: "/api/ticket", // AGREGADO: Mostrar ruta de ticket
       health: "/api/health",
     },
     documentation: "/api/docs", // Para futura implementación
@@ -209,6 +211,7 @@ app.use("*", (req, res) => {
       "/api/reports",
       "/api/cash",
       "/api/config",
+      "/api/ticket", // AGREGADO: Mostrar ruta de ticket
       "/api/health",
     ],
   })
@@ -234,6 +237,7 @@ const startServer = async () => {
       console.log(`🔗 API: http://localhost:${PORT}/api`)
       console.log(`💚 Health: http://localhost:${PORT}/api/health`)
       console.log(`📊 Reports: http://localhost:${PORT}/api/reports`) // AGREGADO: Mostrar ruta de reportes
+      console.log(`🔗 Ticket: http://localhost:${PORT}/api/ticket`) // AGREGADO: Mostrar ruta de ticket
       console.log(`📊 Ambiente: ${process.env.NODE_ENV || "development"}`)
       console.log(`⏰ Iniciado: ${new Date().toISOString()}`)
     })
