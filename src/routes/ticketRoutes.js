@@ -4,7 +4,8 @@ import {
   updateBusinessConfig,
   getTicketConfig,
   updateTicketConfig,
-  getAllConfig
+  getAllConfig,
+  printTicketEscpos
 } from "../controllers/ticket.controller.js"
 import { authenticateToken } from "../middleware/auth.js"
 
@@ -22,5 +23,7 @@ router.put("/ticket", updateTicketConfig)
 
 // Ruta para obtener toda la configuración
 router.get("/all", getAllConfig)
+
+router.post("/print-escpos", printTicketEscpos)
 
 export default router

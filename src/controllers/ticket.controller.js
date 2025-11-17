@@ -1,4 +1,5 @@
 import { executeQuery } from "../config/database.js"
+import escposService from "../services/escposService.js"
 
 // Obtener configuración del negocio
 export const getBusinessConfig = async (req, res) => {
@@ -226,7 +227,7 @@ export const updateTicketConfig = async (req, res) => {
           show_cashier, show_customer, show_payment_method, show_change,
           fiscal_type, show_tax_breakdown, include_cae,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
         [
           enable_print ?? true,
           auto_print ?? false,
@@ -349,6 +350,79 @@ export const getAllConfig = async (req, res) => {
       success: false,
       message: "Error al obtener configuración",
       code: "CONFIG_ERROR"
+    })
+  }
+}
+
+// Generar ESC/POS
+export const printTicketEscpos = async (req, res) => {
+  try {
+    const { saleId, businessConfig, ticketConfig } = req.body
+
+    // Validar que se proporcionaron los datos necesarios
+    if (!saleId || !businessConfig || !ticketConfig) {
+      return res.status(400).json({
+        success: false,
+        message: "Faltan datos requeridos para generar el ticket ESC/POS",
+        code: "MISSING_TICKET_DATA"
+      })
+    }
+
+    // Obtener datos de la venta (incluir cliente e items)
+    const saleQuery = `
+      SELECT s.*, c.customer_name, c.customer_phone 
+      FROM sales s 
+      LEFT JOIN customers c ON s.customer_id = c.id 
+      WHERE s.id = ?
+    `
+    const saleData = await executeQuery(saleQuery, [saleId])
+
+    if (saleData.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Venta no encontrada",
+        code: "SALE_NOT_FOUND"
+      })
+    }
+
+    // Obtener items de la venta
+    const itemsQuery = `
+      SELECT si.*, p.product_name 
+      FROM sale_items si 
+      JOIN products p ON si.product_id = p.id 
+      WHERE si.sale_id = ?
+    `
+    const items = await executeQuery(itemsQuery, [saleId])
+
+    // Preparar datos del ticket
+    const ticketData = {
+      sale: saleData[0],
+      items: items,
+      customer: saleData[0]
+    }
+
+    // Generar comandos ESC/POS
+    const escposCommands = escposService.generateTicket(
+      ticketData,
+      businessConfig,
+      ticketConfig
+    )
+
+    // Retornar los comandos como base64 para que el frontend pueda enviarlos a la impresora
+    res.json({
+      success: true,
+      data: {
+        commands: Buffer.from(escposCommands).toString('base64'),
+        message: "Comandos ESC/POS generados exitosamente"
+      }
+    })
+  } catch (error) {
+    console.error("Error generando ESC/POS:", error)
+    res.status(500).json({
+      success: false,
+      message: "Error al generar comandos de impresión",
+      code: "ESCPOS_GENERATION_ERROR",
+      error: error.message
     })
   }
 }
