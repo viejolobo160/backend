@@ -1,4 +1,5 @@
 import { executeQuery } from "../config/database.js"
+import PDFDocument from "pdfkit"
 
 // Obtener configuración del negocio
 export const getBusinessConfig = async (req, res) => {
@@ -226,7 +227,7 @@ export const updateTicketConfig = async (req, res) => {
           show_cashier, show_customer, show_payment_method, show_change,
           fiscal_type, show_tax_breakdown, include_cae,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
         [
           enable_print ?? true,
           auto_print ?? false,
@@ -349,6 +350,492 @@ export const getAllConfig = async (req, res) => {
       success: false,
       message: "Error al obtener configuración",
       code: "CONFIG_ERROR"
+    })
+  }
+}
+
+export const generateThermalPDF = async (req, res) => {
+  try {
+    const { saleData, businessConfig, ticketConfig } = req.body
+
+    if (!saleData || !saleData.sale || !saleData.items) {
+      return res.status(400).json({
+        success: false,
+        message: "Datos de venta incompletos",
+        code: "INCOMPLETE_SALE_DATA"
+      })
+    }
+
+    // Configuración del PDF térmico
+    // 58mm = 164.409 puntos (1mm = 2.834645669 puntos)
+    const THERMAL_WIDTH = 164.409 // 58mm en puntos
+    const MARGIN_LEFT = 8
+    const MARGIN_RIGHT = 8
+    const CONTENT_WIDTH = THERMAL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
+
+    // Tamaños de fuente según configuración
+    const fontSizes = {
+      small: { title: 10, header: 8, body: 7, small: 6 },
+      normal: { title: 12, header: 9, body: 8, small: 7 },
+      large: { title: 14, header: 10, body: 9, small: 8 }
+    }
+    const fontSize = fontSizes[ticketConfig?.font_size || 'normal']
+
+    // Crear documento PDF con tamaño térmico exacto de 58mm
+    const doc = new PDFDocument({
+      size: [THERMAL_WIDTH, 10000], // Alto dinámico, se ajustará
+      margins: { top: 10, bottom: 10, left: MARGIN_LEFT, right: MARGIN_RIGHT },
+      bufferPages: true
+    })
+
+    // Buffer para almacenar el PDF
+    const chunks = []
+    doc.on('data', chunk => chunks.push(chunk))
+    
+    // Promesa para cuando termine de generar
+    const pdfPromise = new Promise((resolve, reject) => {
+      doc.on('end', () => {
+        const pdfBuffer = Buffer.concat(chunks)
+        resolve(pdfBuffer)
+      })
+      doc.on('error', reject)
+    })
+
+    let yPosition = doc.y
+
+    // === ENCABEZADO CON INFORMACIÓN DEL NEGOCIO ===
+    if (ticketConfig?.show_business_info && businessConfig) {
+      // Nombre del negocio
+      doc.font('Helvetica-Bold')
+        .fontSize(fontSize.title)
+        .text(businessConfig.business_name || 'MI NEGOCIO', MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+      yPosition = doc.y + 3
+
+      // Información del negocio
+      doc.font('Helvetica')
+        .fontSize(fontSize.body)
+
+      if (businessConfig.business_address) {
+        doc.text(businessConfig.business_address, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+        yPosition = doc.y + 2
+      }
+
+      if (businessConfig.business_phone) {
+        doc.text(`Tel: ${businessConfig.business_phone}`, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+        yPosition = doc.y + 2
+      }
+
+      if (ticketConfig?.show_cuit && businessConfig.business_cuit) {
+        doc.text(`CUIT: ${businessConfig.business_cuit}`, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+        yPosition = doc.y + 2
+      }
+
+      if (businessConfig.business_email) {
+        doc.text(businessConfig.business_email, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+        yPosition = doc.y + 2
+      }
+    }
+
+    // Mensaje de encabezado personalizado
+    if (ticketConfig?.header_message) {
+      yPosition += 5
+      doc.moveTo(MARGIN_LEFT, yPosition)
+        .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+        .dash(2, { space: 2 })
+        .stroke()
+      yPosition += 5
+
+      doc.font('Helvetica')
+        .fontSize(fontSize.body)
+        .text(ticketConfig.header_message, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+      yPosition = doc.y + 3
+    }
+
+    // Línea doble separadora
+    yPosition += 5
+    doc.undash()
+      .moveTo(MARGIN_LEFT, yPosition)
+      .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+      .stroke()
+    yPosition += 2
+    doc.moveTo(MARGIN_LEFT, yPosition)
+      .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+      .stroke()
+    yPosition += 5
+
+    // === TIPO FISCAL Y NÚMERO ===
+    doc.font('Helvetica-Bold')
+      .fontSize(fontSize.header)
+      .text(`${ticketConfig?.fiscal_type || 'TICKET'} #${saleData.sale.id}`, MARGIN_LEFT, yPosition, {
+        width: CONTENT_WIDTH,
+        align: 'center'
+      })
+    yPosition = doc.y + 2
+
+    // Fecha y hora
+    const saleDate = new Date(saleData.sale.created_at)
+    const dateStr = saleDate.toLocaleDateString('es-AR', { 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric' 
+    })
+    const timeStr = saleDate.toLocaleTimeString('es-AR', { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    })
+    
+    doc.font('Helvetica')
+      .fontSize(fontSize.body)
+      .text(`${dateStr} ${timeStr}`, MARGIN_LEFT, yPosition, {
+        width: CONTENT_WIDTH,
+        align: 'center'
+      })
+    yPosition = doc.y + 5
+
+    // Línea separadora
+    doc.moveTo(MARGIN_LEFT, yPosition)
+      .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+      .dash(2, { space: 2 })
+      .stroke()
+    yPosition += 5
+
+    // === INFORMACIÓN DEL CLIENTE ===
+    if (ticketConfig?.show_customer && saleData.sale.customer_name && 
+        saleData.sale.customer_name !== 'Consumidor Final') {
+      doc.undash()
+        .font('Helvetica')
+        .fontSize(fontSize.body)
+        .text(`Cliente: ${saleData.sale.customer_name}`, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH
+        })
+      yPosition = doc.y + 2
+
+      if (saleData.sale.customer_document) {
+        doc.text(`DNI/CUIT: ${saleData.sale.customer_document}`, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH
+        })
+        yPosition = doc.y + 2
+      }
+    }
+
+    // === INFORMACIÓN DEL CAJERO ===
+    if (ticketConfig?.show_cashier && saleData.sale.cashier_name) {
+      doc.text(`Cajero: ${saleData.sale.cashier_name}`, MARGIN_LEFT, yPosition, {
+        width: CONTENT_WIDTH
+      })
+      yPosition = doc.y + 2
+    }
+
+    // Línea separadora
+    yPosition += 3
+    doc.moveTo(MARGIN_LEFT, yPosition)
+      .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+      .dash(2, { space: 2 })
+      .stroke()
+    yPosition += 5
+
+    // === DETALLE DE PRODUCTOS ===
+    doc.undash()
+      .font('Helvetica-Bold')
+      .fontSize(fontSize.body)
+      .text('DETALLE DE COMPRA', MARGIN_LEFT, yPosition, {
+        width: CONTENT_WIDTH
+      })
+    yPosition = doc.y + 3
+
+    doc.moveTo(MARGIN_LEFT, yPosition)
+      .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+      .dash(2, { space: 2 })
+      .stroke()
+    yPosition += 5
+
+    // Items
+    doc.undash().font('Helvetica').fontSize(fontSize.body)
+    
+    for (const item of saleData.items) {
+      const quantity = parseFloat(item.quantity)
+      const unitPrice = parseFloat(item.unit_price)
+      const totalPrice = quantity * unitPrice
+      const unit = item.product_unit_type === 'kg' ? 'kg' : 'un'
+
+      // Nombre del producto
+      doc.font('Helvetica-Bold')
+        .text(item.product_name, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH
+        })
+      yPosition = doc.y + 1
+
+      // Detalles: cantidad x precio = total
+      doc.font('Helvetica')
+        .fontSize(fontSize.small)
+      
+      const detailText = `${quantity} ${unit} x $${unitPrice.toFixed(2)}`
+      const totalText = `$${totalPrice.toFixed(2)}`
+      
+      doc.text(detailText, MARGIN_LEFT, yPosition, {
+        width: CONTENT_WIDTH * 0.6,
+        continued: true
+      })
+      .text(totalText, {
+        width: CONTENT_WIDTH * 0.4,
+        align: 'right'
+      })
+      
+      yPosition = doc.y + 3
+    }
+
+    // Línea doble separadora
+    yPosition += 2
+    doc.fontSize(fontSize.body)
+      .moveTo(MARGIN_LEFT, yPosition)
+      .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+      .stroke()
+    yPosition += 2
+    doc.moveTo(MARGIN_LEFT, yPosition)
+      .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+      .stroke()
+    yPosition += 5
+
+    // === TOTALES ===
+    const subtotal = parseFloat(saleData.sale.subtotal)
+    const tax = parseFloat(saleData.sale.tax || 0)
+    const total = parseFloat(saleData.sale.total)
+
+    doc.font('Helvetica')
+      .text('Subtotal:', MARGIN_LEFT, yPosition, {
+        width: CONTENT_WIDTH * 0.5,
+        continued: true
+      })
+      .text(`$${subtotal.toFixed(2)}`, {
+        width: CONTENT_WIDTH * 0.5,
+        align: 'right'
+      })
+    yPosition = doc.y + 2
+
+    // Desglose de IVA
+    if (ticketConfig?.show_tax_breakdown && tax > 0) {
+      doc.text('IVA (21%):', MARGIN_LEFT, yPosition, {
+        width: CONTENT_WIDTH * 0.5,
+        continued: true
+      })
+      .text(`$${tax.toFixed(2)}`, {
+        width: CONTENT_WIDTH * 0.5,
+        align: 'right'
+      })
+      yPosition = doc.y + 2
+    }
+
+    // Línea doble
+    yPosition += 2
+    doc.moveTo(MARGIN_LEFT, yPosition)
+      .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+      .stroke()
+    yPosition += 2
+    doc.moveTo(MARGIN_LEFT, yPosition)
+      .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+      .stroke()
+    yPosition += 5
+
+    // TOTAL
+    doc.font('Helvetica-Bold')
+      .fontSize(fontSize.header)
+      .text('TOTAL:', MARGIN_LEFT, yPosition, {
+        width: CONTENT_WIDTH * 0.5,
+        continued: true
+      })
+      .text(`$${total.toFixed(2)}`, {
+        width: CONTENT_WIDTH * 0.5,
+        align: 'right'
+      })
+    yPosition = doc.y + 5
+
+    // === MÉTODO DE PAGO ===
+    if (ticketConfig?.show_payment_method) {
+      doc.moveTo(MARGIN_LEFT, yPosition)
+        .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+        .dash(2, { space: 2 })
+        .stroke()
+      yPosition += 5
+
+      doc.undash()
+        .font('Helvetica')
+        .fontSize(fontSize.body)
+
+      if (saleData.sale.payment_method === 'multiple' && saleData.sale.payment_methods_formatted) {
+        doc.font('Helvetica-Bold').text('FORMAS DE PAGO:', MARGIN_LEFT, yPosition)
+        yPosition = doc.y + 2
+
+        doc.font('Helvetica')
+        for (const pm of saleData.sale.payment_methods_formatted) {
+          const methodLabels = {
+            efectivo: 'Efectivo',
+            tarjeta_credito: 'Tarjeta de Crédito',
+            tarjeta_debito: 'Tarjeta de Débito',
+            transferencia: 'Transferencia',
+            cuenta_corriente: 'Cuenta Corriente'
+          }
+          const methodLabel = methodLabels[pm.method] || pm.method
+
+          doc.text(`${methodLabel}:`, MARGIN_LEFT, yPosition, {
+            width: CONTENT_WIDTH * 0.6,
+            continued: true
+          })
+          .text(`$${parseFloat(pm.amount).toFixed(2)}`, {
+            width: CONTENT_WIDTH * 0.4,
+            align: 'right'
+          })
+          yPosition = doc.y + 2
+        }
+      } else {
+        const methodLabels = {
+          efectivo: 'Efectivo',
+          tarjeta_credito: 'Tarjeta de Crédito',
+          tarjeta_debito: 'Tarjeta de Débito',
+          transferencia: 'Transferencia',
+          cuenta_corriente: 'Cuenta Corriente',
+          multiple: 'Múltiples'
+        }
+        const methodLabel = methodLabels[saleData.sale.payment_method] || saleData.sale.payment_method
+
+        doc.text(`Forma de pago: ${methodLabel}`, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH
+        })
+        yPosition = doc.y + 3
+      }
+    }
+
+    // === CAE (AFIP) ===
+    if (ticketConfig?.include_cae && saleData.sale.cae) {
+      yPosition += 3
+      doc.moveTo(MARGIN_LEFT, yPosition)
+        .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+        .dash(2, { space: 2 })
+        .stroke()
+      yPosition += 5
+
+      doc.undash()
+        .font('Helvetica')
+        .fontSize(fontSize.small)
+        .text(`CAE: ${saleData.sale.cae}`, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+      yPosition = doc.y + 1
+
+      doc.text(`Vto. CAE: ${saleData.sale.cae_expiration}`, MARGIN_LEFT, yPosition, {
+        width: CONTENT_WIDTH,
+        align: 'center'
+      })
+      yPosition = doc.y + 3
+    }
+
+    // === POLÍTICA DE DEVOLUCIONES ===
+    if (ticketConfig?.return_policy) {
+      yPosition += 5
+      doc.moveTo(MARGIN_LEFT, yPosition)
+        .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+        .stroke()
+      yPosition += 2
+      doc.moveTo(MARGIN_LEFT, yPosition)
+        .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+        .stroke()
+      yPosition += 5
+
+      doc.font('Helvetica-Bold')
+        .fontSize(fontSize.small)
+        .text('POLÍTICA DE DEVOLUCIONES', MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+      yPosition = doc.y + 2
+
+      doc.font('Helvetica')
+        .text(ticketConfig.return_policy, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+      yPosition = doc.y + 3
+    }
+
+    // === PIE DE PÁGINA ===
+    if (ticketConfig?.footer_message || businessConfig?.business_footer_message) {
+      yPosition += 5
+      doc.moveTo(MARGIN_LEFT, yPosition)
+        .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+        .stroke()
+      yPosition += 2
+      doc.moveTo(MARGIN_LEFT, yPosition)
+        .lineTo(THERMAL_WIDTH - MARGIN_RIGHT, yPosition)
+        .stroke()
+      yPosition += 5
+
+      doc.font('Helvetica')
+        .fontSize(fontSize.small)
+        .text(ticketConfig.footer_message || businessConfig.business_footer_message, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+      yPosition = doc.y + 3
+    }
+
+    // Información adicional del negocio
+    if (businessConfig?.business_slogan) {
+      doc.font('Helvetica-Oblique')
+        .fontSize(fontSize.small)
+        .text(businessConfig.business_slogan, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+      yPosition = doc.y + 2
+    }
+
+    if (businessConfig?.business_website) {
+      doc.font('Helvetica')
+        .fontSize(fontSize.small)
+        .text(businessConfig.business_website, MARGIN_LEFT, yPosition, {
+          width: CONTENT_WIDTH,
+          align: 'center'
+        })
+      yPosition = doc.y + 3
+    }
+
+    // Finalizar el documento
+    doc.end()
+
+    // Esperar a que se genere el PDF
+    const pdfBuffer = await pdfPromise
+
+    // Enviar el PDF como respuesta
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="ticket-${saleData.sale.id}.pdf"`)
+    res.setHeader('Content-Length', pdfBuffer.length)
+    res.send(pdfBuffer)
+
+  } catch (error) {
+    console.error("Error generando PDF térmico:", error)
+    res.status(500).json({
+      success: false,
+      message: "Error al generar PDF térmico",
+      code: "PDF_GENERATION_ERROR",
+      error: error.message
     })
   }
 }
