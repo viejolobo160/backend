@@ -271,7 +271,7 @@ export const getSaleById = async (req, res) => {
       })
     }
 
-    // Obtener datos de la venta
+    // Obtener datos de la venta con información de cancelación
     const salesQuery = `
     SELECT 
       s.*,
@@ -280,10 +280,13 @@ export const getSaleById = async (req, res) => {
       c.name as customer_name,
       c.email as customer_email,
       c.phone as customer_phone,
-      c.document_number as customer_document
+      c.document_number as customer_document,
+      cancelled_user.name as cancelled_by_name,
+      cancelled_user.email as cancelled_by_email
     FROM sales s
     LEFT JOIN users u ON s.user_id = u.id
     LEFT JOIN customers c ON s.customer_id = c.id
+    LEFT JOIN users cancelled_user ON s.cancelled_by = cancelled_user.id
     WHERE s.id = ?
   `
 
@@ -409,6 +412,7 @@ export const createSale = async (req, res) => {
       payment_methods,
       items_count: items?.length,
       total,
+      userId: req.user?.id
     })
 
     // Validar que la caja esté abierta
@@ -438,7 +442,7 @@ export const createSale = async (req, res) => {
     if (isMultiplePayment) {
       console.log("💳 Procesando venta con múltiples métodos de pago")
 
-      // Validar que la suma de los pagos múltiples sea igual al total
+      // Validar que la suma de los pagos m��ltiples sea igual al total
       const totalPayments = payment_methods.reduce((sum, pm) => sum + Number.parseFloat(pm.amount), 0)
       const totalAmount = Number.parseFloat(total)
 
@@ -984,7 +988,7 @@ export const cancelSale = async (req, res) => {
     const { reason = "Cancelada por el usuario" } = req.body
 
     console.log("🚀 === INICIO CANCELAR VENTA ===")
-    console.log("📝 Datos recibidos:", { saleId: id, reason })
+    console.log("📝 Datos recibidos:", { saleId: id, reason, userId: req.user?.id })
 
     // Validar ID
     if (!id || isNaN(Number.parseInt(id))) {
@@ -1047,16 +1051,17 @@ export const cancelSale = async (req, res) => {
     // Preparar todas las queries para la transacción
     const queries = []
 
-    // 1. Actualizar estado de la venta
     queries.push({
       query: `
       UPDATE sales 
       SET status = 'cancelled', 
-          notes = CONCAT(COALESCE(notes, ''), ' - Cancelada: ', ?), 
+          notes = CONCAT(COALESCE(notes, ''), ' - Cancelada: ', ?),
+          cancelled_by = ?,
+          cancelled_at = CURRENT_TIMESTAMP,
           updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `,
-      params: [reason, saleId],
+      params: [reason, req.user?.id || null, saleId],
     })
 
     // 2. Restaurar stock de cada producto
@@ -1225,7 +1230,7 @@ export const cancelSale = async (req, res) => {
     console.log("🎉 === VENTA CANCELADA EXITOSAMENTE ===")
     console.log("✅ Stock restaurado para", productStockInfo.length, "productos")
     console.log("✅ Movimientos financieros revertidos")
-    console.log("✅ Estado de venta actualizado")
+    console.log("✅ Estado de venta actualizado con usuario y fecha de cancelación")
 
     res.json({
       success: true,
@@ -1235,6 +1240,8 @@ export const cancelSale = async (req, res) => {
         reason,
         stockRestored: productStockInfo.length,
         totalReverted: sale.total,
+        cancelled_by: req.user?.id || null,
+        cancelled_at: new Date().toISOString(),
       },
     })
   } catch (error) {
