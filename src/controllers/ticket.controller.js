@@ -366,8 +366,19 @@ export const generateThermalPDF = async (req, res) => {
       })
     }
 
-    // 58mm = 164.409 puntos (1mm = 2.834645669 puntos)
-    const THERMAL_WIDTH = 164.409 // 58mm en puntos
+    // --- Conversión mm -> puntos y tamaño dinámico ---
+    const mmToPoints = mm => mm * 2.834645669
+
+    // ancho en mm configurable (58 o 80)
+    const paperWidthMm = Number(ticketConfig?.paper_width) || 58
+    const THERMAL_WIDTH = mmToPoints(paperWidthMm)
+
+    // altura base grande + mm extra para la cola
+    const BASE_HEIGHT = 10000 // valor anterior usado como base
+    const EXTRA_SAFE_MM = Number(ticketConfig?.end_blank_mm) || 40 // mm extra por defecto 40
+    const EXTRA_SAFE_PTS = mmToPoints(EXTRA_SAFE_MM)
+    const PAGE_HEIGHT = BASE_HEIGHT + EXTRA_SAFE_PTS
+
     const MARGIN_LEFT = 3  // Reducido de 8 a 3
     const MARGIN_RIGHT = 3 // Reducido de 8 a 3
     const CONTENT_WIDTH = THERMAL_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
@@ -838,11 +849,15 @@ export const generateThermalPDF = async (req, res) => {
       yPosition = doc.y + 2
     }
 
-    // Agregado espacio adicional de 30 puntos al final
-    // Espacio extra al final del ticket
-    yPosition = doc.y + 2
-    yPosition = doc.y + 2
-    doc.text('\n\n\n\n\n'); // 5 líneas en blanco (ajustable)
+    const endBlankLines = Number(ticketConfig?.end_blank_lines) || 30
+
+    // Mover un poco y añadir líneas en blanco repetidas
+    doc.moveDown(1)
+    if (endBlankLines > 0) {
+      doc.font('Helvetica').fontSize(fontSize.small)
+      doc.text('\n'.repeat(endBlankLines))
+    }
+
     // Finalizar el documento
     doc.end()
 
@@ -865,4 +880,3 @@ export const generateThermalPDF = async (req, res) => {
     })
   }
 }
-+9
